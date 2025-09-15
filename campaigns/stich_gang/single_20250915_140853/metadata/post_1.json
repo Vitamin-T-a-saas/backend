@@ -1,0 +1,13 @@
+{
+  "title": "stich gang - Post",
+  "concept": "remove image 3",
+  "post_type": "carousel",
+  "images": [
+    "campaigns/stich_gang/single_20250915_140853/posts\\stich_gang_-_Post_slide_1.png",
+    "campaigns/stich_gang/single_20250915_140853/posts\\stich_gang_-_Post_slide_2.png",
+    "campaigns/stich_gang/single_20250915_140853/posts\\stich_gang_-_Post_slide_3.png",
+    "campaigns/stich_gang/single_20250915_140853/posts\\stich_gang_-_Post_slide_4.png"
+  ],
+  "success": true,
+  "error": null
+}
