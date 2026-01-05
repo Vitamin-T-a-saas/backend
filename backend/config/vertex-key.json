@@ -1,0 +1,13 @@
+{
+  "type": "service_account",
+  "project_id": "spry-truck-482408-g5",
+  "private_key_id": "adb54f55bda83ae29b669e215da36909f71d0b81",
+  "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQDTc+nOfQ5DO/2y\n7kEjTYwC4XfzZBxXEVs7NeMZz8AP3pLLEKD6CXbvw/Uo618xpeFCODEG6FAfiL4X\n1Ka6tt7Y4pR/1FaSHfIJ7fCBJnveqWK/IemxVr59LJHsTp46jblGeS12NN6AtrKL\nVVyfc4hZSZOD8T56h60+DRBloAmId2tbPwYf5kSsmRiEOGlUG44w+8fxDd4fIAcN\nMjLN5njy5Iqg/bwfcer6s+4eAPEvTOoUdJu42x0XD0886c59pN7+hPy3fBK5OsgH\n59+U2ecn1t/h34xlePMuSRFh4BDr4Wn/z0pt4xasZlHdpnSjaQ+oCD0hMmEKQKnS\nkIVLaXm9AgMBAAECggEADZZ0lHOYx7KX2jhRMJGPyQeatlCH5FhrLQzeFmSGilPa\ndE4R6hSoSJP7sbDI9zRvmy+9MXJwOPaH20Qrn/KXCLIr/2LdBUVYrlFUk8Kt/GA/\ncNofCD7zaAZwghIzPL6qrzVOOeWqfp7pg5FCrcRgzfavvK9zPQXG7iaCF+WxdyFc\nuzygCihl/G8ONmY7qrG7bfUfQ9RJ2zeDKtOjw4+bC5xZkwKDEyke/ZrnamonvtM9\niwALYmjw2JZVj5UENj1rpUpLIbqWq3yur9mlsBefDW3yrCIjFoKEq5yzV6JYnxFo\nym72egVcBJs0e9gxudyiCmoajpYH2P5QcCHdCLf7iQKBgQD6YYRpvIPHVk2LYPf1\nfGRZory8ppGB4Fw7Y6Up+ZsuFSCqHTUi/DQduxSwpHWFB5vf78jeZMsvFJGe8KQi\nNnmD5NI3fWf0REHL7AZgcc+FmI6x0mu49D0yit0oYg+WHOrg1w654maPWWR6Wlgg\ntfOetPFgo+fPNvIL4/9+E7/04wKBgQDYMr87+IhfTC50iAMDAO0YxiNU09qkVGdA\nmTXovbgbdV4V92XVDem+Fp3XOsvt8HnxaHRmFvht+kYJvjHotNA4h4a755Xl605c\nkWJ6IKaovWE38ZOQdGsYfWgAkJczmaEoMOmu63YAaq5K/M0JcCwi6io2x2rXlrYn\nXhMVuxC43wKBgQCIYuRRAIo75Cv7V0faZfb3yKjMjmNGfuNeymmmkrvP/1w6rgxK\n0VzGMSkVC5CkdT+YXTJqyjbPn4GvNWAC7u+EQ/mqllow+ZlprljO4k/rcu2PuZJK\nPmizhmbv33KkD352GU+BO+0n+sa7y0ikENjyw5eUT9Qu0LxKc9ixYaq3hwKBgQDN\nzbEBM5sNrIVkZL0JNO5+cM7dRzaQy8/mTHJm9YK2kMlZe8IySCZDz1+9rLjH7e0H\nAvoa3K7schwN1kHIVacIyOpXISMuVQqpT7RAsag0ZOKQ0KQ6FLiF/YrtTrbAZfRl\nP/qTio0v5F26AGBmJaO+MM6yiq6IP21ymDjurL5EXQKBgDDN3PEc7noCmTTXfo3F\nBDKuRDnHjBnJOQt2ooEpFkanLLbCTNZUYeuDBBwretkh4JqjIiOVerrppCUxsu+W\nNRfTDLqmRFWZ8Af4hsCdqImg8crOuaRVnACjlitBlXZ0Sh+LGxFxo8p1kXtDsX2s\nS6CRy2+6SIpLrWya391GqDYb\n-----END PRIVATE KEY-----\n",
+  "client_email": "vertex-image-bot@spry-truck-482408-g5.iam.gserviceaccount.com",
+  "client_id": "112238884734322601014",
+  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+  "token_uri": "https://oauth2.googleapis.com/token",
+  "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+  "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/vertex-image-bot%40spry-truck-482408-g5.iam.gserviceaccount.com",
+  "universe_domain": "googleapis.com"
+}
