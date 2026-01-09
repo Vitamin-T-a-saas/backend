@@ -1,5 +1,5 @@
 from fastapi import FastAPI, HTTPException, Depends
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, validator
 from typing import Optional, List, Dict, Any, Literal
@@ -15,6 +15,21 @@ from contextlib import contextmanager
 import pickle
 import logging
 from functools import wraps
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
+
+# Add parent directory to path to allow importing utils
+import sys
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+try:
+    from utils.github_storage import upload_image_to_github
+    GITHUB_STORAGE_AVAILABLE = True
+except ImportError as e:
+    logger.warning(f"Could not import github_storage utils: {e}")
+    GITHUB_STORAGE_AVAILABLE = False
 
 # Setup logging
 logging.basicConfig(
@@ -142,17 +157,20 @@ def init_database():
         )
     ''')
     
-    # Content files table
+
+    
+    # Media assets table (GitHub storage - PRIMARY for images)
     cursor.execute('''
-        CREATE TABLE IF NOT EXISTS content_files (
+        CREATE TABLE IF NOT EXISTS media_assets (
             id TEXT PRIMARY KEY,
             session_id TEXT,
-            filename TEXT NOT NULL,
-            file_path TEXT NOT NULL,
-            content_type TEXT NOT NULL,
-            username TEXT,
-            created_at TEXT NOT NULL,
-            file_size INTEGER DEFAULT 0
+            platform TEXT,
+            content_type TEXT,
+            storage TEXT,
+            url TEXT,
+            repo_path TEXT,
+            sha TEXT,
+            created_at TEXT
         )
     ''')
     
@@ -1524,7 +1542,39 @@ async def generate_actual_images(session_id: str):
             output_folder = f"{state['campaign_folder']}/images/storyboard"
             scene_images = _generate_storyboard_images(image_model, storyboard_data, title, output_folder)
             
-            generated_images = scene_images
+            # Upload to GitHub (Mandatory)
+            if not GITHUB_STORAGE_AVAILABLE:
+                raise HTTPException(status_code=500, detail="GitHub storage not configured")
+
+            final_images = []
+            logger.info("Uploading storyboard images to GitHub...")
+            with get_db_connection() as conn:
+                cursor = conn.cursor()
+                for local_path in scene_images:
+                    try:
+                        # Upload
+                        upload_result = upload_image_to_github(local_path, session_id, content_type)
+                        public_url = upload_result['url']
+                        
+                        # Log to DB
+                        asset_id = str(uuid.uuid4())
+                        cursor.execute('''
+                            INSERT INTO media_assets 
+                            (id, session_id, platform, content_type, storage, url, repo_path, sha, created_at)
+                            VALUES (?, ?, 'instagram', ?, 'github', ?, ?, ?, ?)
+                        ''', (asset_id, session_id, content_type, public_url, 
+                              upload_result['repo_path'], upload_result['sha'], datetime.now().isoformat()))
+                        
+                        final_images.append(public_url)
+                        logger.info(f"Uploaded {os.path.basename(local_path)} -> {public_url}")
+                    except Exception as e:
+                        logger.error(f"Failed to upload {local_path}: {e}")
+                        raise HTTPException(status_code=500, detail=f"Failed to upload image to GitHub: {str(e)}")
+                conn.commit()
+
+            # Update variables
+            scene_images = final_images
+            generated_images = final_images
             
             # Save metadata
             image_meta = {
@@ -1547,7 +1597,39 @@ async def generate_actual_images(session_id: str):
             output_folder = f"{state['campaign_folder']}/images/posts"
             post_images = _generate_instagram_post_images(image_model, post_data, title, output_folder)
             
-            generated_images = post_images
+            # Upload to GitHub (Mandatory)
+            if not GITHUB_STORAGE_AVAILABLE:
+                raise HTTPException(status_code=500, detail="GitHub storage not configured")
+
+            final_images = []
+            logger.info("Uploading post images to GitHub...")
+            with get_db_connection() as conn:
+                cursor = conn.cursor()
+                for local_path in post_images:
+                    try:
+                        # Upload
+                        upload_result = upload_image_to_github(local_path, session_id, content_type)
+                        public_url = upload_result['url']
+                        
+                        # Log to DB
+                        asset_id = str(uuid.uuid4())
+                        cursor.execute('''
+                            INSERT INTO media_assets 
+                            (id, session_id, platform, content_type, storage, url, repo_path, sha, created_at)
+                            VALUES (?, ?, 'instagram', ?, 'github', ?, ?, ?, ?)
+                        ''', (asset_id, session_id, content_type, public_url, 
+                              upload_result['repo_path'], upload_result['sha'], datetime.now().isoformat()))
+                        
+                        final_images.append(public_url)
+                        logger.info(f"Uploaded {os.path.basename(local_path)} -> {public_url}")
+                    except Exception as e:
+                        logger.error(f"Failed to upload {local_path}: {e}")
+                        raise HTTPException(status_code=500, detail=f"Failed to upload image to GitHub: {str(e)}")
+                conn.commit()
+
+            # Update variables
+            post_images = final_images
+            generated_images = final_images
             
             # Save metadata
             image_meta = {
@@ -1620,18 +1702,30 @@ async def get_generated_images(session_id: str):
                 "total": 0
             }
         
-        # Collect all image paths
+        # Collect all image paths/urls
         all_images = []
         for content in image_content:
             images = content.get("images", [])
-            for img_path in images:
-                if os.path.exists(img_path):
+            for img_ref in images:
+                # Check if it's a URL
+                if isinstance(img_ref, str) and (img_ref.startswith("http://") or img_ref.startswith("https://")):
                     all_images.append({
-                        "path": img_path,
-                        "filename": os.path.basename(img_path),
+                        "path": img_ref,
+                        "filename": os.path.basename(img_ref.split('?')[0]), # Simple filename extraction
                         "content_type": content.get("content_type"),
-                        "size": os.path.getsize(img_path),
-                        "created": datetime.fromtimestamp(os.path.getctime(img_path)).isoformat()
+                        "size": 0, # Size unknown for remote URL without HEAD request
+                        "created": datetime.now().isoformat(), # Approximate
+                        "is_url": True
+                    })
+                # Check if it's a local path
+                elif isinstance(img_ref, str) and os.path.exists(img_ref):
+                    all_images.append({
+                        "path": img_ref,
+                        "filename": os.path.basename(img_ref),
+                        "content_type": content.get("content_type"),
+                        "size": os.path.getsize(img_ref),
+                        "created": datetime.fromtimestamp(os.path.getctime(img_ref)).isoformat(),
+                        "is_url": False
                     })
         
         return {
@@ -1649,40 +1743,42 @@ async def get_generated_images(session_id: str):
 
 @app.get("/instagram/image/download/{session_id}/{filename}")
 async def download_generated_image(session_id: str, filename: str):
-    """Endpoint 19: Download specific generated image"""
+    """Endpoint 19: Download specific generated image (Redirects to GitHub)"""
     try:
+        # Check GitHub storage first (Primary)
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            # Search by filename similarity in repo_path or url
+            cursor.execute('''
+                SELECT url FROM media_assets 
+                WHERE session_id = ? AND (repo_path LIKE ? OR url LIKE ?)
+            ''', (session_id, f"%{filename}", f"%{filename}"))
+            row = cursor.fetchone()
+            
+            if row and row['url']:
+                logger.info(f"Redirecting download to GitHub: {filename}")
+                return RedirectResponse(url=row['url'])
+
+        # Fallback to local (Legacy/Transient)
         session = validate_session_step(session_id)
         state = get_workflow_state(session_id)
         
-        if not state or not state.get("campaign_folder"):
-            raise HTTPException(status_code=404, detail="Campaign folder not found")
+        if state and state.get("campaign_folder"):
+            images_folder = f"{state['campaign_folder']}/images"
+            if os.path.exists(images_folder):
+                for root, dirs, files in os.walk(images_folder):
+                    if filename in files:
+                        file_path = os.path.join(root, filename)
+                        logger.info(f"Serving local legacy image: {filename}")
+                        media_type = get_media_type(filename)
+                        return FileResponse(
+                            file_path,
+                            media_type=media_type,
+                            filename=filename,
+                            headers={"Content-Disposition": f"attachment; filename={filename}"}
+                        )
         
-        # Search in campaign images folder
-        images_folder = f"{state['campaign_folder']}/images"
-        
-        if not os.path.exists(images_folder):
-            raise HTTPException(status_code=404, detail="Images folder not found")
-        
-        # Search for file
-        for root, dirs, files in os.walk(images_folder):
-            if filename in files:
-                file_path = os.path.join(root, filename)
-                logger.info(f"Serving image: {filename}")
-                
-                # Get correct media type
-                media_type = get_media_type(filename)
-                
-                return FileResponse(
-                    file_path,
-                    media_type=media_type,
-                    filename=filename,
-                    headers={
-                        "Content-Disposition": f"attachment; filename={filename}",
-                        "Access-Control-Expose-Headers": "Content-Disposition"
-                    }
-                )
-        
-        raise HTTPException(status_code=404, detail=f"Image {filename} not found")
+        raise HTTPException(status_code=404, detail=f"Image {filename} not found in GitHub or local storage")
         
     except HTTPException:
         raise
@@ -2093,7 +2189,47 @@ async def _generate_images_flexible(session_id: str, state: dict, content_type: 
             output_folder = f"{campaign_folder}/images/posts"
             images = _generate_instagram_post_images(image_model, post_data, brand_name, output_folder)
         
-        return images
+        # Upload to GitHub (Mandatory)
+        if not GITHUB_STORAGE_AVAILABLE:
+             logger.error("GitHub storage not configured, cannot upload images")
+             return []
+
+        final_images = []
+        if images:
+            logger.info("Uploading images to GitHub (Flexible)...")
+            with get_db_connection() as conn:
+                cursor = conn.cursor()
+                for local_path in images:
+                    try:
+                        # Upload
+                        upload_result = upload_image_to_github(local_path, session_id, content_type)
+                        public_url = upload_result['url']
+                        
+                        # Log to DB
+                        asset_id = str(uuid.uuid4())
+                        cursor.execute('''
+                            INSERT INTO media_assets 
+                            (id, session_id, platform, content_type, storage, url, repo_path, sha, created_at)
+                            VALUES (?, ?, 'instagram', ?, 'github', ?, ?, ?, ?)
+                        ''', (asset_id, session_id, content_type, public_url, 
+                              upload_result['repo_path'], upload_result['sha'], datetime.now().isoformat()))
+                        
+                        final_images.append(public_url)
+                        logger.info(f"Uploaded {os.path.basename(local_path)} -> {public_url}")
+                    except Exception as e:
+                        logger.error(f"Failed to upload {local_path}: {e}")
+                        # In flexible chat mode, we just log error and don't return partial results or crash
+                        pass
+                conn.commit()
+            
+            # If upload failed for all images, return empty to signal failure
+            if images and not final_images:
+                 logger.error("All image uploads failed")
+                 return []
+                 
+            return final_images
+
+        return []
         
     except Exception as e:
         logger.error(f"Image generation error: {e}")
@@ -2880,13 +3016,13 @@ async def list_all_content(session_id: Optional[str] = None, content_type: Optio
     try:
         content_files = []
         
-        # Get files from database
+        # Get files from database - NEW LOGIC (Media Assets)
         with get_db_connection() as conn:
             cursor = conn.cursor()
             
             query = '''
-                SELECT filename, file_path, content_type, username, created_at, file_size, session_id
-                FROM content_files WHERE 1=1
+                SELECT url, repo_path, content_type, platform, created_at, session_id
+                FROM media_assets WHERE 1=1
             '''
             params = []
             
@@ -2904,39 +3040,19 @@ async def list_all_content(session_id: Optional[str] = None, content_type: Optio
             db_files = cursor.fetchall()
             
             for row in db_files:
-                if os.path.exists(row['file_path']):
-                    content_files.append({
-                        "filename": row['filename'],
-                        "path": row['file_path'],
-                        "content_type": row['content_type'],
-                        "username": row['username'],
-                        "created": row['created_at'],
-                        "size": row['file_size'],
-                        "session_id": row['session_id']
-                    })
+                content_files.append({
+                    "filename": os.path.basename(row['repo_path']),
+                    "path": row['url'],
+                    "content_type": row['content_type'],
+                    "username": row['platform'], # Mapping platform to username field for compatibility
+                    "created": row['created_at'],
+                    "size": 0, # Unknown size for remote assets
+                    "session_id": row['session_id'],
+                    "is_url": True,
+                    "storage": "github"
+                })
         
-        # Scan campaigns folder for additional files
-        campaigns_path = "campaigns"
-        if os.path.exists(campaigns_path):
-            for root, dirs, files in os.walk(campaigns_path):
-                for file in files:
-                    file_path = os.path.join(root, file)
-                    
-                    # Skip if already in list
-                    if any(f['path'] == file_path for f in content_files):
-                        continue
-                    
-                    content_files.append({
-                        "filename": file,
-                        "path": file_path,
-                        "content_type": "unknown",
-                        "username": "unknown",
-                        "created": datetime.fromtimestamp(os.path.getctime(file_path)).isoformat(),
-                        "size": os.path.getsize(file_path),
-                        "session_id": None
-                    })
-        
-        logger.info(f"Retrieved {len(content_files)} content files")
+        logger.info(f"Retrieved {len(content_files)} media assets")
         
         return {
             "files": content_files,
@@ -3004,32 +3120,54 @@ async def download_content_file(filename: str):
         raise HTTPException(status_code=500, detail=str(e))
 @app.get("/content/campaign/{session_id}")
 async def get_campaign_content(session_id: str):
-    """Endpoint 33: Get all files for a specific campaign"""
+    """Endpoint 33: Get all files for a specific campaign (Local + GitHub)"""
     try:
         session = validate_session_step(session_id)
         state = get_workflow_state(session_id)
         
-        campaign_folder = state.get("campaign_folder") if state else None
-        
-        if not campaign_folder or not os.path.exists(campaign_folder):
-            return {
-                "files": [],
-                "total": 0,
-                "message": "No campaign folder found"
-            }
-        
         files = []
-        for root, dirs, filenames in os.walk(campaign_folder):
-            for filename in filenames:
-                file_path = os.path.join(root, filename)
+        
+        # 1. Get GitHub Media Assets (Primary for images)
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT url, repo_path, content_type, created_at 
+                FROM media_assets WHERE session_id = ?
+            ''', (session_id,))
+            assets = cursor.fetchall()
+            
+            for asset in assets:
+                filename = os.path.basename(asset['repo_path'])
                 files.append({
                     "filename": filename,
-                    "path": file_path,
-                    "relative_path": os.path.relpath(file_path, campaign_folder),
-                    "size": os.path.getsize(file_path),
-                    "created": datetime.fromtimestamp(os.path.getctime(file_path)).isoformat(),
-                    "type": os.path.splitext(filename)[1]
+                    "path": asset['url'],
+                    "relative_path": asset['repo_path'], # Use repo path as relative
+                    "size": 0,
+                    "created": asset['created_at'],
+                    "type": os.path.splitext(filename)[1],
+                    "storage": "github",
+                    "is_url": True
                 })
+
+        # 2. Get Local Files (Text/Metadata/Legacy)
+        campaign_folder = state.get("campaign_folder") if state else None
+        
+        if campaign_folder and os.path.exists(campaign_folder):
+            for root, dirs, filenames in os.walk(campaign_folder):
+                for filename in filenames:
+                    file_path = os.path.join(root, filename)
+                    
+                    # Add all local files (frontend can filter if needed)
+                    files.append({
+                        "filename": filename,
+                        "path": file_path,
+                        "relative_path": os.path.relpath(file_path, campaign_folder),
+                        "size": os.path.getsize(file_path),
+                        "created": datetime.fromtimestamp(os.path.getctime(file_path)).isoformat(),
+                        "type": os.path.splitext(filename)[1],
+                        "storage": "local",
+                        "is_url": False
+                    })
         
         logger.info(f"Retrieved {len(files)} files for campaign {session_id}")
         
