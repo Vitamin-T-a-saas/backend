@@ -100,10 +100,49 @@ def init_database():
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
     
+    # Brands table (Persistent Identity)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS brands (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL UNIQUE,
+            description TEXT,
+            brand_values TEXT,
+            target_audience TEXT,
+            instagram_expectations TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    ''')
+
+    # Campaigns table (Marketing Project)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS campaigns (
+            id TEXT PRIMARY KEY,
+            brand_id TEXT,
+            name TEXT NOT NULL,
+            description TEXT,
+            status TEXT DEFAULT 'active',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(brand_id) REFERENCES brands(id)
+        )
+    ''')
+
+    # Migration: Check if brand_id exists in campaigns
+    cursor.execute("PRAGMA table_info(campaigns)")
+    camp_columns = [info[1] for info in cursor.fetchall()]
+    if 'brand_id' not in camp_columns:
+        logger.info("Migrating database: Adding brand_id to campaigns")
+        try:
+            cursor.execute('ALTER TABLE campaigns ADD COLUMN brand_id TEXT')
+        except Exception as e:
+            logger.error(f"Migration failed (campaigns): {e}")
+
     # Workflow sessions table
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS workflow_sessions (
             session_id TEXT PRIMARY KEY,
+            campaign_id TEXT,
             workflow_type TEXT,
             channel TEXT,
             current_step TEXT NOT NULL,
@@ -112,9 +151,20 @@ def init_database():
             updated_at TEXT NOT NULL,
             completed_at TEXT,
             campaign_folder TEXT,
-            metadata TEXT
+            metadata TEXT,
+            FOREIGN KEY(campaign_id) REFERENCES campaigns(id)
         )
     ''')
+
+    # Migration: Check if campaign_id exists in workflow_sessions (for existing DBs)
+    cursor.execute("PRAGMA table_info(workflow_sessions)")
+    columns = [info[1] for info in cursor.fetchall()]
+    if 'campaign_id' not in columns:
+        logger.info("Migrating database: Adding campaign_id to workflow_sessions")
+        try:
+            cursor.execute('ALTER TABLE workflow_sessions ADD COLUMN campaign_id TEXT')
+        except Exception as e:
+            logger.error(f"Migration failed: {e}")
     
     # Workflow states table (stores pickled state)
     cursor.execute('''
@@ -157,7 +207,7 @@ def init_database():
         )
     ''')
     
-
+ 
     
     # Media assets table (GitHub storage - PRIMARY for images)
     cursor.execute('''
@@ -358,11 +408,16 @@ def parse_instagram_input(input_text: str) -> str:
     
     return username
 
-def create_campaign_folder(brand_name: str, channel: str) -> str:
+def create_campaign_folder(brand_name: str, channel: str, campaign_id: str = None) -> str:
     """Create organized campaign folder structure"""
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    safe_brand = "".join(c if c.isalnum() or c in " -_" else "" for c in brand_name).replace(" ", "_")
-    folder_name = f"campaigns/{safe_brand}/{channel}_{timestamp}"
+    # Use campaign_id for deterministic path if available, else timestamp
+    if campaign_id:
+        safe_brand = "".join(c if c.isalnum() or c in " -_" else "" for c in brand_name).replace(" ", "_")
+        folder_name = f"campaigns/{safe_brand}/{channel}_{campaign_id}"
+    else:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        safe_brand = "".join(c if c.isalnum() or c in " -_" else "" for c in brand_name).replace(" ", "_")
+        folder_name = f"campaigns/{safe_brand}/{channel}_{timestamp}"
     
     # Create all necessary subfolders
     subfolders = ["storyboards", "posts", "images", "captions", "metadata", "emails", "scripts"]
@@ -426,25 +481,29 @@ def get_media_type(filename: str) -> str:
 
 def save_workflow_session(session_id: str, current_step: str, workflow_type: str = None,
                          channel: str = None, status: str = "active", 
-                         campaign_folder: str = None, metadata: Dict = None):
+                         campaign_folder: str = None, metadata: Dict = None,
+                         campaign_id: str = None):
     """Save or update workflow session"""
     try:
         with get_db_connection() as conn:
             cursor = conn.cursor()
             now = datetime.now().isoformat()
             
-            # Check if session exists
-            cursor.execute('SELECT created_at FROM workflow_sessions WHERE session_id = ?', (session_id,))
+            # Check if session exists to preserve creation time and existing campaign_id
+            cursor.execute('SELECT created_at, campaign_id FROM workflow_sessions WHERE session_id = ?', (session_id,))
             existing = cursor.fetchone()
             created_at = existing['created_at'] if existing else now
+            
+            # Use provided campaign_id or preserve existing one, or None
+            final_campaign_id = campaign_id if campaign_id else (existing['campaign_id'] if existing else None)
             
             cursor.execute('''
                 INSERT OR REPLACE INTO workflow_sessions 
                 (session_id, workflow_type, channel, current_step, status, 
-                 created_at, updated_at, campaign_folder, metadata)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 created_at, updated_at, campaign_folder, metadata, campaign_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (session_id, workflow_type, channel, current_step, status, 
-                  created_at, now, campaign_folder, json.dumps(metadata) if metadata else None))
+                  created_at, now, campaign_folder, json.dumps(metadata) if metadata else None, final_campaign_id))
             conn.commit()
             
         logger.info(f"Session {session_id} saved: step={current_step}, status={status}")
@@ -636,7 +695,91 @@ Best regards,
 The {brand_name} Team"""
         }
     
-    return {}
+def get_brand_by_name(name: str) -> Optional[dict]:
+    """Get brand by name"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM brands WHERE name = ?", (name,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+def create_brand(name: str, description: str, values: list, audience: list, expectations: str) -> str:
+    """Create a new persistent brand"""
+    brand_id = str(uuid.uuid4())
+    now = datetime.now().isoformat()
+    
+    # Serialize lists to JSON strings for storage
+    values_json = json.dumps(values) if values else "[]"
+    audience_json = json.dumps(audience) if audience else "[]"
+    expectations_json = json.dumps(expectations) if isinstance(expectations, list) else (expectations or "")
+    
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('''
+            INSERT INTO brands (id, name, description, brand_values, target_audience, instagram_expectations, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (brand_id, name, description, values_json, audience_json, expectations_json, now, now))
+        conn.commit()
+    logger.info(f"Created Brand: {name} ({brand_id})")
+    return brand_id
+
+def update_brand(brand_id: str, description: str, values: list, audience: list, expectations: str):
+    """Update existing brand"""
+    now = datetime.now().isoformat()
+    values_json = json.dumps(values) if values else "[]"
+    audience_json = json.dumps(audience) if audience else "[]"
+    expectations_json = json.dumps(expectations) if isinstance(expectations, list) else (expectations or "")
+    
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('''
+            UPDATE brands 
+            SET description = ?, brand_values = ?, target_audience = ?, instagram_expectations = ?, updated_at = ?
+            WHERE id = ?
+        ''', (description, values_json, audience_json, expectations_json, now, brand_id))
+        conn.commit()
+    logger.info(f"Updated Brand: {brand_id}")
+
+def create_campaign(name: str, description: str = "", brand_id: str = None) -> str:
+    """Create a new campaign and return its ID"""
+    campaign_id = str(uuid.uuid4())
+    now = datetime.now().isoformat()
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO campaigns (id, brand_id, name, description, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (campaign_id, brand_id, name, description, now, now))
+            conn.commit()
+            logger.info(f"Created new campaign: {name} ({campaign_id})")
+            return campaign_id
+    except Exception as e:
+        logger.error(f"Error creating campaign: {e}")
+        raise
+
+def update_campaign(campaign_id: str, name: str, description: str = ""):
+    """Update an existing campaign"""
+    now = datetime.now().isoformat()
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                UPDATE campaigns 
+                SET name = ?, description = ?, updated_at = ?
+                WHERE id = ?
+            ''', (name, description, now, campaign_id))
+            conn.commit()
+            logger.info(f"Updated campaign: {name} ({campaign_id})")
+    except Exception as e:
+        logger.error(f"Error updating campaign {campaign_id}: {e}")
+        raise
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('''
+            UPDATE campaigns SET name = ?, description = ?, updated_at = ? WHERE id = ?
+        ''', (name, description, now, campaign_id))
+        conn.commit()
 
 # ============= 1. WORKFLOW INITIATION & BRAND DNA (3 endpoints) =============
 
@@ -662,18 +805,48 @@ async def start_workflow():
 
 @app.post("/workflow/brand-dna", response_model=BrandDnaResponse)
 async def submit_brand_dna(request: BrandDnaRequest):
-    """Endpoint 2: Submit brand DNA"""
+    """Endpoint 2: Submit brand DNA (Persisted to Brands Table)"""
     try:
         session_id = request.session_id or str(uuid.uuid4())
         
-        # Get or create state
-        state = get_workflow_state(session_id)
-        if not state:
-            state = get_initial_state()
-            save_workflow_session(session_id, "collect_brand_dna")
+        # 1. Handle Brand Persistence
+        existing_brand = get_brand_by_name(request.brand_name)
         
-        # Save brand DNA
+        if existing_brand:
+            brand_id = existing_brand['id']
+            # Update existing brand with latest info
+            update_brand(brand_id, request.brand_description, request.brand_values, 
+                         request.target_audience, request.instagram_expectations)
+            message_suffix = "Brand updated."
+        else:
+            # Create new brand
+            brand_id = create_brand(request.brand_name, request.brand_description, 
+                                    request.brand_values, request.target_audience, 
+                                    request.instagram_expectations)
+            message_suffix = "New Brand created."
+            
+        # 2. Handle Campaign linking
+        current_session = get_workflow_session(session_id)
+        existing_campaign_id = current_session.get('campaign_id') if current_session else None
+        
+        campaign_name = f"{request.brand_name} Campaign"
+        
+        if existing_campaign_id:
+            update_campaign(existing_campaign_id, campaign_name, request.brand_description)
+            campaign_id = existing_campaign_id
+            message_suffix += " Campaign updated."
+        else:
+            # Link new campaign to the Brand ID
+            campaign_id = create_campaign(campaign_name, request.brand_description, brand_id=brand_id)
+            message_suffix += " Campaign created."
+        
+        # 3. Update Session
+        # We populate the legacy state["brand_dna"] dict for compatibility with the rest of the app
+        # But the Source of Truth is now the DB
+        state = get_workflow_state(session_id) or get_initial_state()
+        
         state["brand_dna"] = {
+            "brand_id": brand_id, # Link in state too
             "brand_name": request.brand_name,
             "brand_description": request.brand_description,
             "brand_values": request.brand_values,
@@ -681,15 +854,14 @@ async def submit_brand_dna(request: BrandDnaRequest):
             "instagram_expectations": request.instagram_expectations
         }
         
-        # Update workflow
-        save_workflow_session(session_id, "choose_channel")
+        save_workflow_session(session_id, "choose_channel", campaign_id=campaign_id)
         save_workflow_state(session_id, state)
         
-        logger.info(f"Brand DNA saved for session {session_id}: {request.brand_name}")
+        logger.info(f"Brand DNA processing complete. Session: {session_id}, Brand: {brand_id}, Campaign: {campaign_id}")
         
         return BrandDnaResponse(
             success=True,
-            message=f"Brand DNA saved for {request.brand_name}",
+            message=f"Brand DNA processed. {message_suffix}",
             session_id=session_id,
             next_step="channel"
         )
@@ -880,9 +1052,12 @@ async def choose_channel(request: ChannelRequest):
         # Update state
         state["channel"] = request.channel
         
+        # Get campaign ID from session
+        campaign_id = session.get("campaign_id")
+        
         # Create campaign folder
         brand_name = state["brand_dna"]["brand_name"]
-        campaign_folder = create_campaign_folder(brand_name, request.channel)
+        campaign_folder = create_campaign_folder(brand_name, request.channel, campaign_id)
         state["campaign_folder"] = campaign_folder
         
         # Determine next step
@@ -1952,8 +2127,19 @@ async def _handle_instagram_chat(session_id: str, state: dict, intent_data: dict
     
     try:
         # Set campaign folder if not exists
+        # Set campaign folder if not exists
         if not state.get("campaign_folder"):
-            campaign_folder = create_campaign_folder(brand_dna.get("brand_name", "campaign"), "instagram")
+            # Check for linked campaign
+            campaign_id = session.get("campaign_id")
+            if not campaign_id:
+                # Create ad-hoc campaign for chat session
+                campaign_name = f"{brand_dna.get('brand_name', 'Chat')} Chat Campaign"
+                campaign_id = create_campaign(campaign_name, "Created via Chat")
+                # Update session
+                update_workflow_step(session_id, session["current_step"]) # No-op to just trigger update if needed, but we need save_workflow_session to update campaign_id keys
+                save_workflow_session(session_id, session["current_step"], campaign_id=campaign_id)
+            
+            campaign_folder = create_campaign_folder(brand_dna.get("brand_name", "campaign"), "instagram", campaign_id)
             state["campaign_folder"] = campaign_folder
         
         # Determine content type
@@ -2297,8 +2483,17 @@ async def _handle_email_chat(session_id: str, state: dict, intent_data: dict, br
     
     try:
         # Set campaign folder if not exists
+        # Set campaign folder if not exists
         if not state.get("campaign_folder"):
-            campaign_folder = create_campaign_folder(brand_dna.get("brand_name", "campaign"), "email")
+            # Check for linked campaign
+            campaign_id = session.get("campaign_id")
+            if not campaign_id:
+                # Create ad-hoc campaign for chat session
+                campaign_name = f"{brand_dna.get('brand_name', 'Chat')} Email Campaign"
+                campaign_id = create_campaign(campaign_name, "Created via Chat")
+                save_workflow_session(session_id, session["current_step"], campaign_id=campaign_id)
+
+            campaign_folder = create_campaign_folder(brand_dna.get("brand_name", "campaign"), "email", campaign_id)
             state["campaign_folder"] = campaign_folder
         
         # Update state
