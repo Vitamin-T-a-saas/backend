@@ -1,14 +1,11 @@
 langgraph
 schedule
-threading
-dotenv
+python-dotenv
 selenium
 langchain_google_genai
 langchain_core
-statistics
 langchain_community
 langchain_huggingface
-collections
 bm25
 faiss-cpu
 pandas
@@ -21,5 +18,3 @@ fastapi
 uvicorn
 pydantic
 python-multipart
-sqlite3
-contextlib
